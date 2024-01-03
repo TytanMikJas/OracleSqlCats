@@ -315,7 +315,7 @@ SELECT REGEXP_REPLACE(SYS_CONNECT_BY_PATH('', '    '), '    ', '', 1, 1) || pseu
 
 /* Zad. 17. Wyswietlic pseudonimy, przydzialy myszy oraz nazwy band dla kotow operuj?cych
 na terenie POLE posiadajacych przydzial myszy wiekszy od 50. Uwzglednic fakt, ze sa w
-stadzie koty posiadaj?ce prawo do polowa? na calym oobslugiwanymo przez stado terenie.
+stadzie koty posiadajace prawo do polowan na calym oobslugiwanymo przez stado terenie.
 Nie stosowac podzapytan.*/
 
 SELECT pseudo "POLUJE W POLU", przydzial_myszy "PRZYDZIAL MYSZY", nazwa "BANDA"
@@ -773,17 +773,1406 @@ ORDER BY 1, 2 DESC;
 
 
 /* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/* -------------------------------------------------------------- L I S T A   T R Z E C I A ---------------------------------------------------------------------------------------------------*/
+/* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+
+/*Zad. 34. Napisa? blok PL/SQL, kt�ry wybiera z relacji Kocury koty o funkcji podanej z klawiatury. Jedynym efektem dzia?ania bloku ma by? komunikat informuj?cy czy znaleziono,
+czy te? nie, kota pe?ni?cego podan? funkcj? (w przypadku znalezienia kota wy?wietli? nazw? odpowiedniej funkcji).  */
+
+SET SERVEROUTPUT ON;
+
+DECLARE
+    liczba NUMBER;
+    fun Kocury.funkcja%TYPE;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('');
+    SELECT COUNT(pseudo), MIN(funkcja) INTO liczba, fun
+    FROM Kocury
+    WHERE funkcja = TO_CHAR('&nazwa_funkcji');
+
+    IF liczba > 0 THEN
+        DBMS_OUTPUT.PUT_LINE('Znaleziono kota pelniacego funkcje ' || fun);
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('Nie znaleziono');
+    END IF;
+END;
+/
+
+
+/* Zad. 35. Napisa? blok PL/SQL, kt�ry wyprowadza na ekran nast?puj?ce informacje o kocie o pseudonimie wprowadzonym z klawiatury (w zale?no?ci od rzeczywistych danych):
+-	'calkowity roczny przydzial myszy >700'
+-	'imi? zawiera litere A'
+-	'maj jest miesiacem przystapienia do stada'
+-	'nie odpowiada kryteriom'.
+Powy?sze informacje wymienione s? zgodnie z ich hierarchi? wa?no?ci, nale?y wi?c wyprowadzi? pierwsz? prawdziw? informacj? o kocie pomijaj?c sprawdzanie nast?pnych. */
+
+DECLARE 
+    znaleziony BOOLEAN default false;
+    calowity_przydzial_kota NUMBER;
+    imie_kota Kocury.imie%TYPE;
+    miesiac_dolaczenia_kota NUMBER;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('');
+    SELECT (NVL(przydzial_myszy, 0) + NVL(myszy_extra, 0)) * 12, imie, EXTRACT(MONTH FROM w_stadku_od) 
+    INTO calowity_przydzial_kota, imie_kota, miesiac_dolaczenia_kota
+        FROM Kocury
+        WHERE pseudo = TO_CHAR('&pseudo');
+    
+    IF calowity_przydzial_kota > 700 THEN
+        DBMS_OUTPUT.PUT_LINE('Calkowity roczny przydzial kota wiekszy od 700, rowny = ' || calowity_przydzial_kota);
+        znaleziony := true;
+    END IF;
+    
+    IF imie_kota LIKE '%A%' THEN
+        DBMS_OUTPUT.PUT_LINE('Imie kota zawiera litere A, imie =  ' || imie_kota);
+        znaleziony := true;
+    END IF;
+    
+    IF miesiac_dolaczenia_kota = 5 THEN
+        DBMS_OUTPUT.PUT_LINE('Kot dolaczyl w maju, dokladna data =  ' || miesiac_dolaczenia_kota);
+        znaleziony := true;
+    END IF;
+    
+    IF NOT znaleziony THEN
+        DBMS_OUTPUT.PUT_LINE('Kot nie odpowiada ani jednemu z kryterium');
+    END IF;
+    
+    EXCEPTION
+        WHEN no_data_found THEN
+            dbms_output.put_line('Kot o podanym pseudo nie istnieje');  
+END;
+/
+
+
+/* Zad. 36. W zwiazku z duza wydajno?ci? w ?owieniu myszy SZEFUNIO postanowi? wynagrodzi? swoich podw?adnych. 
+Og?osi? wi?c, ?e podwy?sza indywidualny przydzia? myszy ka?dego kota o 10%, w kolejno?ci od kota o najni?szym przydziale pocz?wszy na kocie o najwy?szym przydziale sko?czywszy.
+Ustali? te?, ?e proces zwi?kszania przydzia?u myszy nale?y zako?czy? gdy suma przydzia?�w wszystkich kot�w przekroczy liczb? 1050. 
+Je?li dla jakiego? kota przydzia? myszy po podwy?ce przekroczy maksymaln? warto?? nale?n? dla pe?nionej funkcji 
+(max_myszy z relacji Funkcje), przydzia? myszy po podwy?ce ma by? r�wny tej warto?ci. Napisa? blok PL/SQL z kursorem, kt�ry realizuje to zadanie.
+Blok ma dzia?a? tak d?ugo, a? suma wszystkich przydzia?�w rzeczywi?cie przekroczy 1050 (liczba �obieg�w podwy?kowych� mo?e by? wi?ksza od 1 a wi?c i podwy?ka mo?e by? wi?ksza ni? 10%).
+Wy?wietli? na ekranie sum? przydzia?�w myszy po wykonaniu zadania wraz z liczb? liczb? modyfikacji w relacji Kocury. Na ko?cu wycofa? wszystkie zmiany. */
+
+DECLARE
+    suma_przydzialow NUMBER;
+    liczba_zmian NUMBER := 0;
+    finalna_suma NUMBER := 1050;
+    
+    pm Kocury.przydzial_myszy%TYPE;
+    mm Funkcje.max_myszy%TYPE;
+  
+    CURSOR przydzialy IS
+        SELECT przydzial_myszy pm, max_myszy mm INTO  pm, mm
+            FROM Kocury NATURAL JOIN Funkcje
+            ORDER BY PRZYDZIAL_MYSZY 
+            FOR UPDATE OF przydzial_myszy;
+
+    wiersz przydzialy%ROWTYPE;
+BEGIN
+  SELECT SUM(przydzial_myszy) INTO suma_przydzialow FROM KOCURY;
+
+    <<loop1>> LOOP
+        OPEN przydzialy;
+        
+        LOOP
+            FETCH przydzialy INTO wiersz; 
+            EXIT loop1 WHEN suma_przydzialow > finalna_suma;
+            EXIT WHEN przydzialy%NOTFOUND;
+    
+            IF (ROUND(1.1*wiersz.pm) < wiersz.mm) THEN
+              UPDATE Kocury 
+                  SET przydzial_myszy = ROUND(1.1 * wiersz.pm)
+                  WHERE CURRENT OF przydzialy;
+    
+              liczba_zmian := liczba_zmian+1;
+              suma_przydzialow:=suma_przydzialow + round(0.1*wiersz.pm);
+                  
+            ELSIF (wiersz.pm != wiersz.mm) THEN
+              UPDATE Kocury
+                  SET przydzial_myszy = wiersz.mm
+                  WHERE CURRENT OF przydzialy;
+                  
+                  liczba_zmian:=liczba_zmian+1;
+                  suma_przydzialow:=suma_przydzialow + (wiersz.mm - wiersz.pm);
+            END IF;
+            
+        END LOOP;
+        CLOSE przydzialy;
+        
+    END LOOP loop1;
+  dbms_output.put_line('Calk. przydzial w stadku ' || suma_przydzialow || '. Zmian: ' || liczba_zmian );
+END;
+/
+
+SELECT imie, NVL(przydzial_myszy,0) "Myszki po podwyzce" 
+    FROM Kocury 
+    ORDER BY przydzial_myszy DESC ;
+
+rollback;
+
+
+/* Zad. 37. Napisa? blok, kt�ry powoduje wybranie w p?tli kursorowej FOR pi?ciu kot�w o najwy?szym ca?kowitym przydziale myszy. Wynik wy?wietli? na ekranie. */
+DECLARE 
+    CURSOR przydzialy IS
+        SELECT pseudo, NVL(przydzial_myszy,0) +  NVL(myszy_extra, 0) zjada
+            FROM Kocury
+            ORDER BY zjada DESC;
+        
+    wiersz przydzialy%ROWTYPE;
+BEGIN
+    OPEN przydzialy;
+    DBMS_OUTPUT.PUT_LINE('Nr   Pseudonim   Zjada');
+    DBMS_OUTPUT.PUT_LINE('----------------------');
+    FOR i IN 1..5
+    LOOP
+        FETCH przydzialy INTO wiersz;
+        EXIT WHEN przydzialy%NOTFOUND;
+        DBMS_OUTPUT.PUT_LINE(TO_CHAR(i) ||'    '|| RPAD(wiersz.pseudo, 8) || '    ' || LPAD(TO_CHAR(wiersz.zjada), 5));
+    END LOOP;
+END;
+/
+
+/* Zad. 38. Napisa? blok, kt�ry zrealizuje wersj? a. lub wersj? b. zad. 19 w spos�b uniwersalny (bez konieczno?ci uwzgl?dniania wiedzy o g??boko?ci drzewa). 
+Dan? wej?ciow? ma by? maksymalna liczba wy?wietlanych prze?o?onych. */
+
+DECLARE
+    max_poziom NUMBER := &poziom;
+    poziom NUMBER;
+    kot Kocury%ROWTYPE;
+BEGIN
+    DBMS_OUTPUT.PUT(RPAD('Imie', 10));
+    FOR i in 1..max_poziom
+    LOOP
+        DBMS_OUTPUT.PUT('|  '||RPAD('Szef '||i, 9));
+    END LOOP;
+        DBMS_OUTPUT.NEW_LINE();
+        DBMS_OUTPUT.PUT('----------');
+    FOR i in 1..max_poziom
+    LOOP
+        DBMS_OUTPUT.PUT('|-----------');
+    END LOOP;
+        DBMS_OUTPUT.NEW_LINE();
+    FOR kot_bazowy IN (SELECT * FROM Kocury WHERE funkcja IN ('KOT', 'MILUSIA'))
+    LOOP
+        poziom := 0;
+        kot := kot_bazowy;
+        DBMS_OUTPUT.PUT(RPAD(kot.imie, 10));
+        WHILE (poziom < max_poziom)
+        LOOP
+            IF kot.szef IS NULL
+                THEN DBMS_OUTPUT.PUT('|           ');
+            ELSE
+                SELECT * INTO kot FROM Kocury WHERE pseudo = kot.szef;
+                DBMS_OUTPUT.PUT('| '||RPAD(kot.imie, 10));
+            END IF;
+            poziom := poziom + 1;
+        END LOOP;
+        DBMS_OUTPUT.NEW_LINE();
+    END LOOP;
+END;
+/
+
+/* Zad. 39. Napisa? blok PL/SQL wczytuj?cy trzy parametry reprezentuj?ce nr bandy, nazw? bandy oraz teren polowa?.
+Skrypt ma uniemo?liwia? wprowadzenie istniej?cych ju? warto?ci parametr�w poprzez obs?ug? odpowiednich wyj?tk�w. 
+Sytuacj? wyj?tkow? jest tak?e wprowadzenie numeru bandy <=0. W przypadku zaistnienia sytuacji wyj?tkowej nale?y wyprowadzi? na ekran odpowiedni komunikat.
+W przypadku prawid?owych parametr�w nale?y utworzy? now? band? w relacji Bandy. Zmian? nale?y na ko?cu wycofa?. */
+DECLARE
+    num_ban NUMBER:= &nr_bandy;
+    naz_ban BANDY.NAZWA%TYPE := '&nazwa_bandy';
+    ter_ban BANDY.TEREN%TYPE := '&teren_bandy';
+    liczba_znalezionych NUMBER;
+    istnieje EXCEPTION;
+    ujemny EXCEPTION;
+    wiadomosc_exc    VARCHAR2(30)         := '';
+BEGIN
+    IF num_ban < 0 THEN 
+        RAISE ujemny;
+    END IF;
+    
+    SELECT COUNT(*) INTO liczba_znalezionych
+        FROM Bandy
+        WHERE nr_bandy = num_ban;
+    IF liczba_znalezionych <> 0 
+        THEN wiadomosc_exc := 'Numer bandy ' || num_ban || ',';
+    END IF;
+    
+    
+    SELECT COUNT(*) INTO liczba_znalezionych
+    FROM Bandy
+    WHERE nazwa = naz_ban;
+    IF liczba_znalezionych <> 0 
+        THEN wiadomosc_exc := wiadomosc_exc || ' ' || naz_ban || ',';
+    END IF;
+    
+    SELECT COUNT(*) INTO liczba_znalezionych
+    FROM Bandy
+    WHERE teren = ter_ban;
+    IF liczba_znalezionych <> 0 
+        THEN wiadomosc_exc := wiadomosc_exc || ' ' || ter_ban || ',';
+    END IF;
+    
+    IF LENGTH(wiadomosc_exc) > 0 THEN
+        RAISE istnieje;
+    END IF;
+    
+    INSERT INTO BANDY(NR_BANDY, NAZWA, TEREN) VALUES (num_ban, naz_ban, ter_ban);
+    
+EXCEPTION
+    WHEN ujemny THEN
+        DBMS_OUTPUT.PUT_LINE('Numer bany musi byc liczba dodatnia calkowita');
+    WHEN istnieje THEN
+        DBMS_OUTPUT.PUT_LINE(TRIM(TRAILING ',' FROM wiadomosc_exc) || ' juz istnieje');
+END;
+/
+
+ROLLBACK;
+
+/* Zad. 40. Przerobi? blok z zadania 39 na procedur? umieszczon? w bazie danych. */
+CREATE OR REPLACE PROCEDURE Add_Banda (numer_bandy Bandy.nr_bandy%TYPE, nazwa_bandy Bandy.nazwa%TYPE, teren_bandy Bandy.teren%TYPE)
+AS
+    num_ban Bandy.nr_bandy%TYPE:= numer_bandy;
+    naz_ban Bandy.NAZWA%TYPE := UPPER(nazwa_bandy);
+    ter_ban Bandy.TEREN%TYPE := UPPER(teren_bandy);
+    liczba_znalezionych NUMBER;
+    istnieje EXCEPTION;
+    ujemny EXCEPTION;
+    wiadomosc_exc    VARCHAR2(40)         := '';
+BEGIN
+    IF num_ban < 0 THEN 
+        RAISE ujemny;
+    END IF;
+    
+    SELECT COUNT(*) INTO liczba_znalezionych
+        FROM Bandy
+        WHERE nr_bandy = num_ban;
+    IF liczba_znalezionych <> 0 
+        THEN wiadomosc_exc := 'Numer bandy ' || num_ban || ',';
+    END IF;
+    
+    
+    SELECT COUNT(*) INTO liczba_znalezionych
+    FROM Bandy
+    WHERE nazwa = naz_ban;
+    IF liczba_znalezionych <> 0 
+        THEN wiadomosc_exc := wiadomosc_exc || ' ' || naz_ban || ',';
+    END IF;
+    
+    SELECT COUNT(*) INTO liczba_znalezionych
+    FROM Bandy
+    WHERE teren = ter_ban;
+    IF liczba_znalezionych <> 0 
+        THEN wiadomosc_exc := wiadomosc_exc || ' ' || ter_ban || ',';
+    END IF;
+    
+    IF LENGTH(wiadomosc_exc) > 0 THEN
+        RAISE istnieje;
+    END IF;
+    
+    INSERT INTO BANDY(NR_BANDY, NAZWA, TEREN) VALUES (num_ban, naz_ban, ter_ban);
+    
+EXCEPTION
+    WHEN ujemny THEN
+        DBMS_OUTPUT.PUT_LINE('Numer bany musi byc liczba dodatnia calkowita');
+    WHEN istnieje THEN
+        DBMS_OUTPUT.PUT_LINE(TRIM(TRAILING ',' FROM wiadomosc_exc) || ' juz istnieje');
+END Add_Banda;
+/
+
+BEGIN
+    Add_Banda(11, 'fd', 'ae');
+END;
+/
+ROLLBACK;
+
+/* Zad. 41. Zdefiniowa? wyzwalacz, kt�ry zapewni, ?e numer nowej bandy b?dzie zawsze wi?kszy o 1 od najwy?szego numeru istniej?cej ju? bandy.
+Sprawdzi? dzia?anie wyzwalacza wykorzystuj?c procedur? z zadania 40. */
+
+CREATE OR REPLACE TRIGGER nowy_numer_bandy
+BEFORE INSERT ON Bandy
+FOR EACH ROW
+BEGIN
+    SELECT MAX(nr_bandy)+1 INTO :NEW.nr_bandy FROM Bandy;
+END;
+/
+
+DROP TRIGGER nowy_numer_bandy;
+/
+
+/* Zad. 42. Milusie postanowi?y zadba? o swoje interesy. Wynaj??y wi?c informatyka, aby zapu?ci? wirusa w system Tygrysa. 
+Teraz przy ka?dej pr�bie zmiany przydzia?u myszy na plus (o minusie w og�le nie mo?e by? mowy - pr�ba takiej zmiany ma by? blokowana,
+w ramach zaproponowanego mechanizmu, wyj?tkiem) o warto?? mniejsz? ni? 10% przydzia?u myszy Tygrysa ?al Milu? ma by? utulony podwy?k? ich przydzia?u o t? 10%�ow? warto??
+oraz podwy?k? myszy extra o 5. Tygrys ma by? ukarany strat? wspomnianych 10%. Je?li jednak podwy?ka b?dzie satysfakcjonowa?a Milusie (podwy?ka o 10% i wi?cej), 
+przydzia? myszy extra Tygrysa ma wzrosn?? o 5. 
+
+Zaproponowa? dwa rozwi?zania zadania, kt�re omin? podstawowe ograniczenie dla wyzwalacza wierszowego aktywowanego poleceniem DML tzn. brak mo?liwo?ci odczytu lub zmiany relacji,
+na kt�rej operacja (polecenie DML) �wyzwala� ten wyzwalacz. W pierwszym rozwi?zaniu (klasycznym) wykorzysta? kilku wyzwalaczy i pami?? w postaci specyfikacji dedykowanego zadaniu pakietu,
+w drugim wykorzysta? wyzwalacz COMPOUND. 
+Poda? przyk?ad funkcjonowania wyzwalaczy a nast?pnie zlikwidowa? wprowadzone przez nie zmiany.*/
+
+CREATE OR REPLACE PACKAGE wirus AS
+    ilosc_premii NUMBER := 0;
+    ilosc_kar NUMBER := 0;
+    procent_tygrysa NUMBER := 0;
+END;
+/
+
+CREATE OR REPLACE TRIGGER odczyt_procentu_tygrysa
+BEFORE UPDATE OF przydzial_myszy ON Kocury
+BEGIN
+    SELECT ROUND(przydzial_myszy*0.1) INTO wirus.procent_tygrysa FROM Kocury WHERE pseudo = 'TYGRYS';
+END;
+/
+
+CREATE OR REPLACE TRIGGER trigger_wirusa
+BEFORE UPDATE OF przydzial_myszy ON Kocury
+FOR EACH ROW
+DECLARE
+    obnizenie_milusi EXCEPTION;
+BEGIN
+    IF :NEW.funkcja = 'MILUSIA' THEN
+    
+        IF :new.przydzial_myszy < :old.przydzial_myszy THEN
+            :new.przydzial_myszy := :old.przydzial_myszy;
+            RAISE obnizenie_milusi;
+            
+        ELSIF :new.przydzial_myszy < :old.przydzial_myszy + wirus.procent_tygrysa THEN
+            :new.przydzial_myszy := :old.przydzial_myszy + wirus.procent_tygrysa;
+            :new.myszy_extra := :old.myszy_extra + 5;
+            wirus.ilosc_kar := wirus.ilosc_kar + 1;
+            DBMS_OUTPUT.PUT_LINE('Zmieniono przydzial ' || :old.pseudo || ' z ' || :old.przydzial_myszy || ' na ' || :new.przydzial_myszy);
+            
+        ELSE
+            wirus.ilosc_premii := wirus.ilosc_premii + 1;
+            DBMS_OUTPUT.PUT_LINE('Madry  wladca uhonorowal ' || :old.pseudo || ' w postaci premii z ' || :old.przydzial_myszy || ' na ' || :new.przydzial_myszy || ' myszy');
+        END IF;
+        
+    END IF;
+EXCEPTION
+    WHEN obnizenie_milusi THEN DBMS_OUTPUT.PUT_LINE('DZIWNY BLAD NIEWIADOMO CZYM SPOWODOWANY - prosze sprobowac wprowadzic inna premie!');
+END;
+/
+
+CREATE OR REPLACE TRIGGER trigger_kar_i_nagrod
+AFTER UPDATE OF przydzial_myszy ON Kocury
+DECLARE
+    premie NUMBER := 0;
+    kary NUMBER := 0;
+BEGIN
+    IF wirus.ilosc_premii > 0 THEN
+        premie := wirus.ilosc_premii;
+        wirus.ilosc_premii := 0;
+        DBMS_OUTPUT.PUT_LINE('Uczciwy wladca zasluzyl na podwyzke ' || 5*premie || ' myszy extra');
+        UPDATE Kocury SET myszy_extra = (myszy_extra + 5*premie) WHERE pseudo = 'TYGRYS';
+    END IF;
+    IF wirus.ilosc_kar > 0 THEN
+        kary := wirus.ilosc_kar;
+        wirus.ilosc_kar := 0;
+        DBMS_OUTPUT.PUT_LINE('Nieuczciwy wladca zostanie ukrany o ' || (wirus.procent_tygrysa*kary) || '% ');
+        UPDATE Kocury SET przydzial_myszy = (przydzial_myszy - wirus.procent_tygrysa*kary) WHERE pseudo = 'TYGRYS';
+    END IF;
+END;
+/
+
+UPDATE Kocury SET przydzial_myszy = przydzial_myszy + 100 WHERE funkcja = 'MILUSIA';
+UPDATE Kocury SET przydzial_myszy = przydzial_myszy - 1 WHERE funkcja = 'MILUSIA';
+UPDATE Kocury SET przydzial_myszy = przydzial_myszy + 1 WHERE funkcja = 'MILUSIA';
+
+ROLLBACK;
+
+DROP PACKAGE wirus;
+DROP TRIGGER odczyt_procentu_tygrysa;
+DROP TRIGGER trigger_wirusa;
+DROP TRIGGER trigger_kar_i_nagrod;
+
+
+--42.2
+CREATE OR REPLACE TRIGGER wirus 
+FOR UPDATE OF przydzial_myszy ON Kocury
+  COMPOUND TRIGGER
+        procent_tygrysa NUMBER := 0;
+        obnizenie_milusi EXCEPTION;
+        ilosc_premii NUMBER := 0;
+        ilosc_kar NUMBER := 0;
+        
+    BEFORE STATEMENT IS BEGIN
+        SELECT ROUND(przydzial_myszy*0.1) INTO procent_tygrysa FROM Kocury WHERE pseudo = 'TYGRYS';
+    END BEFORE STATEMENT;
+
+    BEFORE EACH ROW IS BEGIN
+        IF :new.funkcja = 'MILUSIA' THEN
+        
+            IF :new.przydzial_myszy < :old.przydzial_myszy THEN
+                :new.przydzial_myszy := :old.przydzial_myszy;
+                RAISE obnizenie_milusi;
+                
+            ELSIF :new.przydzial_myszy < :old.przydzial_myszy + procent_tygrysa THEN
+                :new.przydzial_myszy := :old.przydzial_myszy + procent_tygrysa;
+                :new.myszy_extra := :old.myszy_extra + 5;
+                ilosc_kar := ilosc_kar + 1;
+                DBMS_OUTPUT.PUT_LINE('Zmieniono przydzial ' || :old.pseudo || ' z ' || :old.przydzial_myszy || ' na ' || :new.przydzial_myszy);
+                
+            ELSE
+                ilosc_premii := ilosc_premii + 1;
+            DBMS_OUTPUT.PUT_LINE('Madry  wladca uhonorowal ' || :old.pseudo || ' w postaci premii z ' || :old.przydzial_myszy || ' na ' || :new.przydzial_myszy || ' myszy');
+            END IF;
+            
+        END IF;
+        EXCEPTION
+            WHEN obnizenie_milusi THEN DBMS_OUTPUT.PUT_LINE('DZIWNY BLAD NIEWIADOMO CZYM SPOWODOWANY - prosze sprobowac wprowadzic inna premie!');
+    END BEFORE EACH ROW ;
+
+    AFTER STATEMENT IS BEGIN
+        IF ilosc_premii > 0 THEN
+            DBMS_OUTPUT.PUT_LINE('Uczciwy wladca zasluzyl na podwyzke ' || 5*ilosc_premii || ' myszy extra');
+            UPDATE Kocury SET myszy_extra = (myszy_extra + 5*ilosc_premii) WHERE pseudo = 'TYGRYS';
+            ilosc_premii := 0;
+        END IF;
+        IF ilosc_kar > 0 THEN
+            DBMS_OUTPUT.PUT_LINE('Nieuczciwy wladca zostanie ukrany o ' || (procent_tygrysa*ilosc_kar) || '% ');
+            UPDATE Kocury SET przydzial_myszy = (przydzial_myszy - procent_tygrysa*ilosc_kar) WHERE pseudo = 'TYGRYS';
+            ilosc_kar := 0;
+        END IF;
+    END AFTER STATEMENT ;
+END;
+/
+
+UPDATE Kocury SET przydzial_myszy = przydzial_myszy + 100 WHERE funkcja = 'MILUSIA';
+UPDATE Kocury SET przydzial_myszy = przydzial_myszy - 1 WHERE funkcja = 'MILUSIA';
+UPDATE Kocury SET przydzial_myszy = przydzial_myszy + 1 WHERE funkcja = 'MILUSIA';
+
+SELECT * FROM Kocury WHERE FUNKCJA IN ('MILUSIA', 'SZEFUNIO') ORDER BY funkcja, pseudo;
+
+ROLLBACK;
+
+DROP TRIGGER wirus;
+
+
+/* ALTERNATYWNE 43 */
+DECLARE
+    CURSOR ILE_JEST (NAZWA_BANDY BANDY.NAZWA%TYPE, PODANA_PLEC KOCURY.PLEC%TYPE, PODANA_FUNKCJA FUNKCJE.FUNKCJA%TYPE) IS
+        SELECT COUNT(*) 
+            FROM KOCURY K JOIN BANDY B ON K.NR_BANDY = B.NR_BANDY 
+            WHERE NAZWA = NAZWA_BANDY 
+            AND PLEC=PODANA_PLEC 
+            AND FUNKCJA = PODANA_FUNKCJA 
+            GROUP BY NAZWA, PLEC, FUNKCJA;
+        
+    CURSOR FUNKCJA_W_BANDZIE (NAZWA_BANDY BANDY.NAZWA%TYPE, PODANA_PLEC KOCURY.PLEC%TYPE, PODANA_FUNKCJA FUNKCJE.FUNKCJA%TYPE) IS
+        SELECT SUM(PRZYDZIAL_MYSZY) + SUM(NVL(MYSZY_EXTRA, 0)) SUMA 
+            FROM KOCURY K JOIN BANDY B ON K.NR_BANDY = B.NR_BANDY 
+            WHERE NAZWA = NAZWA_BANDY 
+            AND PLEC=PODANA_PLEC 
+            AND FUNKCJA = PODANA_FUNKCJA 
+            GROUP BY NAZWA, PLEC, FUNKCJA;
+    
+    CURSOR SUMA_DLA_FUNKCJI IS
+        SELECT F.FUNKCJA, SUM(NVL(PRZYDZIAL_MYSZY,0)) + SUM(NVL(MYSZY_EXTRA,0)) SUMA_DLA_FUNKCJI 
+            FROM FUNKCJE F LEFT JOIN KOCURY K ON F.FUNKCJA = K.FUNKCJA 
+            GROUP BY F.FUNKCJA 
+            ORDER BY F.FUNKCJA;
+    
+    CURSOR KOTY_DANEJ_PLCI_W_BANDZIE IS
+        SELECT NAZWA, PLEC, COUNT(*) ILE, SUM(PRZYDZIAL_MYSZY) + SUM(NVL(MYSZY_EXTRA, 0)) SUMA_BANDY 
+            FROM KOCURY K JOIN BANDY B ON K.NR_BANDY = B.NR_BANDY
+            GROUP BY NAZWA, PLEC
+            ORDER BY NAZWA, PLEC;
+        
+    SUMA_BANDY NUMBER;
+    SUMA_FUNKCJI NUMBER;
+    SUMA NUMBER;
+    ILE NUMBER:=0;
+BEGIN
+    DBMS_OUTPUT.PUT(RPAD('NAZWA',16) || RPAD('PLEC',8) || RPAD('ILE', 8));
+    FOR FUNKCJA IN (SELECT DISTINCT FUNKCJA FROM FUNKCJE ORDER BY FUNKCJA)
+    LOOP
+        DBMS_OUTPUT.PUT(RPAD(FUNKCJA.FUNKCJA,16));
+    END LOOP;
+    DBMS_OUTPUT.PUT_LINE(RPAD('SUMA',12));
+    
+    DBMS_OUTPUT.PUT(RPAD('----------------',16) || RPAD('--------',8) || RPAD('--------', 8));
+    FOR FUNKCJA IN (SELECT DISTINCT FUNKCJA FROM FUNKCJE ORDER BY FUNKCJA)
+    LOOP
+        DBMS_OUTPUT.PUT(RPAD('----------------',16));
+    END LOOP;
+    DBMS_OUTPUT.PUT_LINE(RPAD('------------',12));
+    
+    
+    FOR BANDA_PODSUMOWANIE IN KOTY_DANEJ_PLCI_W_BANDZIE
+    LOOP
+        DBMS_OUTPUT.PUT(RPAD(BANDA_PODSUMOWANIE.NAZWA,16) || CASE WHEN BANDA_PODSUMOWANIE.PLEC = 'M' THEN RPAD('KOCUR',8) ELSE RPAD('KOTKA',8) END || RPAD(BANDA_PODSUMOWANIE.ILE, 8) );
+        
+        FOR FUNKCJA_L IN (SELECT DISTINCT FUNKCJA FROM FUNKCJE ORDER BY FUNKCJA)
+        LOOP
+            OPEN ILE_JEST ( BANDA_PODSUMOWANIE.NAZWA, BANDA_PODSUMOWANIE.PLEC, FUNKCJA_L.FUNKCJA);
+            IF ILE_JEST%NOTFOUND THEN
+                DBMS_OUTPUT.PUT(RPAD('', 16)); 
+            ELSE
+                OPEN FUNKCJA_W_BANDZIE (BANDA_PODSUMOWANIE.NAZWA, BANDA_PODSUMOWANIE.PLEC, FUNKCJA_L.FUNKCJA);
+                FETCH FUNKCJA_W_BANDZIE INTO ILE;
+                CLOSE FUNKCJA_W_BANDZIE;
+                DBMS_OUTPUT.PUT(RPAD(ILE, 16)); 
+                ILE := 0;
+            END IF;
+            CLOSE ILE_JEST;
+            
+        END LOOP;
+        
+        DBMS_OUTPUT.PUT_LINE(RPAD(BANDA_PODSUMOWANIE.SUMA_BANDY, 8));
+    END LOOP;
+    
+    DBMS_OUTPUT.PUT(RPAD('----------------',16) || RPAD('--------',8) || RPAD('--------', 8));
+    FOR FUNKCJA IN (SELECT DISTINCT FUNKCJA FROM FUNKCJE ORDER BY FUNKCJA)
+    LOOP
+        DBMS_OUTPUT.PUT(RPAD('----------------',16));
+    END LOOP;
+    DBMS_OUTPUT.PUT_LINE(RPAD('------------',12));
+    
+    DBMS_OUTPUT.PUT(RPAD('ZJADA RAZEM',16) || RPAD('        ',8) || RPAD('        ', 8));
+    FOR SUMA IN SUMA_DLA_FUNKCJI
+    LOOP
+        DBMS_OUTPUT.PUT(RPAD(SUMA.SUMA_DLA_FUNKCJI,16));
+    END LOOP;
+    SELECT SUM(PRZYDZIAL_MYSZY) + SUM(NVL(MYSZY_EXTRA, 0)) INTO SUMA FROM KOCURY;
+    DBMS_OUTPUT.PUT_LINE(RPAD(SUMA,12));
+    
+END;
+/
+
+
+/* Zad. 44. Tygrysa zaniepokoi?o niewyt?umaczalne obni?enie zapas�w "myszowych". Postanowi? wi?c wprowadzi? podatek pog?�wny, kt�ry zasili?by spi?arni?.
+Zarz?dzi? wi?c, ?e ka?dy kot ma obowi?zek oddawa? 5% (zaokr?glonych w g�r?) swoich ca?kowitych "myszowych" przychod�w. Dodatkowo od tego co pozostanie:
+-  koty nie posiadaj?ce podw?adnych oddaj? po dwie myszy za nieudolno?? w   
+   umizgach o awans,
+-  koty nie posiadaj?ce wrog�w oddaj? po jednej myszy za zbytni?  ugodowo??,
+    -  koty p?ac? dodatkowy podatek, kt�rego form? okre?la wykonawca zadania.
+Napisa? funkcj?, kt�rej parametrem jest pseudonim kota, wyznaczaj?c? nale?ny podatek pog?�wny kota. 
+Funkcj? t? razem z procedur? z zad. 40 nale?y umie?ci? w pakiecie, a nast?pnie wykorzysta? j? do okre?lenia podatku dla wszystkich kot�w.*/
+
+CREATE OR REPLACE PACKAGE pakiet_podatkowy AS
+    FUNCTION podatek (pseudonim Kocury.pseudo%TYPE) RETURN NUMBER;
+    PROCEDURE Add_Banda (numer_bandy Bandy.nr_bandy%TYPE, nazwa_bandy Bandy.nazwa%TYPE, teren_bandy Bandy.teren%TYPE);
+END pakiet_podatkowy;
+/
+
+CREATE OR REPLACE PACKAGE BODY pakiet_podatkowy AS
+    FUNCTION podatek (pseudonim Kocury.pseudo%TYPE) RETURN NUMBER IS
+        podatek NUMBER := 0;
+        counter NUMBER := 0;
+        dodatek NUMBER := 0;
+    BEGIN
+        SELECT CEIL((NVL(przydzial_myszy, 0) + NVL(myszy_extra, 0))*0.05) INTO podatek
+            FROM Kocury 
+            WHERE pseudo = pseudonim;
+        
+        SELECT COUNT(*) INTO counter 
+            FROM Bandy 
+            WHERE szef_bandy = pseudonim;
+        IF counter = 0 THEN 
+            podatek := podatek + 2;
+        END IF;
+        
+        SELECT COUNT(*) INTO counter 
+            FROM Wrogowie_kocurow 
+            WHERE pseudo = pseudonim;
+        IF counter = 0 THEN
+            podatek := podatek + 1;
+        END IF;
+            
+        SELECT przydzial_myszy + NVL(myszy_extra, 0) INTO dodatek 
+            FROM Kocury
+            WHERE pseudo = pseudonim;
+            
+        podatek := podatek + CEIL(dodatek/10);
+        
+        RETURN podatek;
+    END podatek;
+    
+    PROCEDURE Add_Banda (numer_bandy Bandy.nr_bandy%TYPE, nazwa_bandy Bandy.nazwa%TYPE, teren_bandy Bandy.teren%TYPE)
+    AS
+        num_ban Bandy.nr_bandy%TYPE:= numer_bandy;
+        naz_ban Bandy.NAZWA%TYPE := UPPER(nazwa_bandy);
+        ter_ban Bandy.TEREN%TYPE := UPPER(teren_bandy);
+        liczba_znalezionych NUMBER;
+        istnieje EXCEPTION;
+        ujemny EXCEPTION;
+        wiadomosc_exc    VARCHAR2(40)         := '';
+    BEGIN
+        IF num_ban < 0 THEN 
+            RAISE ujemny;
+        END IF;
+        
+        SELECT COUNT(*) INTO liczba_znalezionych
+            FROM Bandy
+            WHERE nr_bandy = num_ban;
+        IF liczba_znalezionych <> 0 
+            THEN wiadomosc_exc := 'Numer bandy ' || num_ban || ',';
+        END IF;
+        
+        
+        SELECT COUNT(*) INTO liczba_znalezionych
+        FROM Bandy
+        WHERE nazwa = naz_ban;
+        IF liczba_znalezionych <> 0 
+            THEN wiadomosc_exc := wiadomosc_exc || ' ' || naz_ban || ',';
+        END IF;
+        
+        SELECT COUNT(*) INTO liczba_znalezionych
+        FROM Bandy
+        WHERE teren = ter_ban;
+        IF liczba_znalezionych <> 0 
+            THEN wiadomosc_exc := wiadomosc_exc || ' ' || ter_ban || ',';
+        END IF;
+        
+        IF LENGTH(wiadomosc_exc) > 0 THEN
+            RAISE istnieje;
+        END IF;
+        
+        INSERT INTO BANDY(NR_BANDY, NAZWA, TEREN) VALUES (num_ban, naz_ban, ter_ban);
+        
+    EXCEPTION
+        WHEN ujemny THEN
+            DBMS_OUTPUT.PUT_LINE('Numer bany musi byc liczba dodatnia calkowita');
+        WHEN istnieje THEN
+            DBMS_OUTPUT.PUT_LINE(TRIM(TRAILING ',' FROM wiadomosc_exc) || ' juz istnieje');
+    END Add_Banda;
+END;
+/
+
+BEGIN
+    FOR kot IN (SELECT * FROM Kocury) LOOP
+        DBMS_OUTPUT.PUT_LINE(RPAD(kot.pseudo, 10) || ' - ' || RPAD(NVL(pakiet_podatkowy.podatek(kot.PSEUDO), 0), 20));
+    END LOOP;
+END;
+/
+
+DROP PACKAGE pakiet_podatkowy;
+
+
+
+/* Zad. 45. Tygrys zauwa?y? dziwne zmiany warto?ci swojego prywatnego przydzia?u myszy (patrz zadanie 42). Nie niepokoi?y go zmiany na plus ale te na minus by?y,
+jego zdaniem, niedopuszczalne. Zmotywowa? wi?c jednego ze swoich szpieg�w do dzia?ania i dzi?ki temu odkry? niecne praktyki Milu? (zadanie 42).
+Poleci? wi?c swojemu informatykowi skonstruowanie mechanizmu zapisuj?cego w relacji Dodatki_extra (patrz Wyk?ady - cz. 2) dla ka?dej z Milu? -10
+(minus dziesi??) myszy dodatku extra przy zmianie na plus kt�regokolwiek z przydzia?�w myszy Milu?, wykonanej przez innego operatora ni? on sam (Tygrys). 
+Zaproponowa? taki mechanizm, w zast?pstwie za informatyka Tygrysa.
+W rozwi?zaniu wykorzysta? funkcj? LOGIN_USER zwracaj?c? nazw? u?ytkownika aktywuj?cego wyzwalacz oraz elementy dynamicznego SQL'a. */
+
+CREATE TABLE DODATKI_EXTRA 
+    (id_dodatku     NUMBER(6)       GENERATED BY DEFAULT ON NULL AS IDENTITY CONSTRAINT dod_pk_id PRIMARY KEY,
+    pseudo          VARCHAR2(15)    CONSTRAINT dod_ps_fk REFERENCES Kocury(pseudo),
+    dod_extra       NUMBER(3)       NOT NULL
+    );
+    
+    
+CREATE OR REPLACE TRIGGER kontra_wirus
+    BEFORE UPDATE OF przydzial_myszy ON Kocury
+    FOR EACH ROW
+DECLARE 
+    PRAGMA AUTONOMOUS_TRANSACTION;
+BEGIN
+    IF :NEW.przydzial_myszy > :old.przydzial_myszy  
+    AND :NEW.funkcja = 'MILUSIA'
+    AND LOGIN_USER <> 'TYGRYS' THEN
+                DBMS_OUTPUT.PUT_LINE('Wykryto nieautoryzowana zmiane dokonana przez: ' || LOGIN_USER);        
+                EXECUTE IMMEDIATE 
+                'DECLARE
+                    CURSOR milusie IS SELECT * 
+                        FROM Kocury 
+                        WHERE funkcja = ''MILUSIA''; 
+                BEGIN
+                    FOR milusia IN milusie LOOP
+                        INSERT INTO DODATKI_EXTRA(pseudo, dod_extra) VALUES (milusia.pseudo, -10);
+                        DBMS_OUTPUT.PUT_LINE(''Odjeto 10 myszek milusi '' || milusia.pseudo); 
+                    END LOOP;
+                END;';
+            COMMIT;
+    END IF;
+END;
+/
+
+UPDATE Kocury SET przydzial_myszy = przydzial_myszy + 1 WHERE funkcja = 'MILUSIA';
+
+SELECT * FROM Kocury WHERE funkcja = 'MILUSIA';
+
+ROLLBACK;
+
+DROP TRIGGER kontra_wirus;
+DROP TABLE DODATKI_EXTRA;
+
+
+/* Zad. 46. Napisa? wyzwalacz, kt�ry uniemo?liwi wpisanie kotu przydzia?u myszy spoza przedzia?u (min_myszy, max_myszy) okre?lonego dla ka?dej funkcji w relacji Funkcje.
+Ka?da pr�ba wykroczenia poza obowi?zuj?cy przedzia? ma by? dodatkowo monitorowana w osobnej relacji (kto, kiedy, jakiemu kotu, jak? operacj?). */
+
+
+CREATE TABLE OSZUSTWA
+    (ID_WYKROCZENIA     NUMBER GENERATED BY DEFAULT ON NULL AS IDENTITY CONSTRAINT wy_pk PRIMARY KEY,
+    KTO                 VARCHAR2(20)    NOT NULL,
+    KIEDY               DATE            NOT NULL,
+    KOTU                VARCHAR2(15)    CONSTRAINT wy_jk_fk REFERENCES Kocury(pseudo),
+    OPERACJA            VARCHAR2(20)    NOT NULL);
+
+CREATE OR REPLACE TRIGGER limit_przydzialu
+    BEFORE UPDATE OF przydzial_myszy  OR INSERT ON Kocury
+    FOR EACH ROW
+DECLARE
+    maxMyszy NUMBER;
+    minMyszy NUMBER;
+    przestepca VARCHAR2(20);
+    operacja VARCHAR(20) := 'UPDATE';
+    niedozwolony_przydzial EXCEPTION;
+    PRAGMA AUTONOMOUS_TRANSACTION;
+BEGIN
+    SELECT max_myszy, min_myszy INTO maxMyszy, minMyszy FROM Funkcje WHERE funkcja = :new.funkcja;
+    
+    IF INSERTING THEN 
+        operacja := 'INSERT';
+    END IF;
+    
+    IF :new.przydzial_myszy > maxMyszy OR :new.przydzial_myszy < minMyszy THEN
+        przestepca := LOGIN_USER;
+        INSERT INTO OSZUSTWA(KTO, KIEDY, KOTU, OPERACJA) VALUES (przestepca, SYSDATE, :new.pseudo, operacja);
+        COMMIT;
+        RAISE niedozwolony_przydzial;
+    END IF;
+END;
+/
+UPDATE Kocury SET przydzial_myszy = 0 WHERE pseudo = 'LOLA';
+SELECT * FROM Kocury WHERE pseudo = 'LOLA';
+
+ROLLBACK;
+
+DROP TRIGGER limit_przydzialu;
+DROP TABLE OSZUSTWA;
+
+
+/* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/* -------------------------------------------------------------- L I S T A   C Z W A R T A ---------------------------------------------------------------------------------------------------*/
+/* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+/* Zad 47 */
+
+-------------- K O C U R Y ---------------
+CREATE OR REPLACE TYPE KocuryO AS OBJECT 
+(
+     imie               VARCHAR2(15),
+     plec               VARCHAR2(1),
+     pseudo             VARCHAR2(15),
+     funkcja            VARCHAR2(10),
+     szef               VARCHAR2(15),
+     w_stadku_od        DATE,
+     przydzial_myszy    NUMBER(3),
+     myszy_extra        NUMBER(3),
+     nr_bandy           NUMBER(2),
+     MEMBER FUNCTION caly_przydzial RETURN NUMBER,
+     MEMBER FUNCTION dni_w_stadku RETURN NUMBER,
+     MAP MEMBER FUNCTION opis_kota RETURN VARCHAR2
+);
+/
+
+CREATE OR REPLACE TYPE BODY KocuryO AS
+
+    MEMBER FUNCTION caly_przydzial RETURN NUMBER IS
+    BEGIN
+        RETURN przydzial_myszy + NVL(myszy_extra, 0);
+    END;
+    
+    MEMBER FUNCTION dni_w_stadku RETURN NUMBER IS
+        dni NUMBER;
+    BEGIN
+        SELECT (trunc(sysdate) - w_stadku_od) INTO dni FROM dual;
+        RETURN dni;
+    END;
+    
+    MAP MEMBER FUNCTION opis_kota RETURN VARCHAR2 IS
+    BEGIN
+        RETURN 'Imie ' || imie || ' pseudo ' || pseudo || ' plec ' || plec || ' funkcja ' || funkcja || ' banda ' || nr_bandy;
+    END;
+END;
+/
+
+CREATE TABLE KocuryT OF KocuryO 
+(
+    CONSTRAINT KocuryT_key PRIMARY KEY (pseudo)
+);
+/
+
+
+-------------- P L E B S ---------------
+CREATE OR REPLACE TYPE PlebsO AS OBJECT
+(
+    pseudo      VARCHAR2(15),
+    kot         REF KocuryO,
+    MEMBER FUNCTION opis_plebsa RETURN VARCHAR2
+);
+/
+
+CREATE OR REPLACE TYPE BODY PlebsO
+AS
+    MEMBER FUNCTION opis_plebsa RETURN VARCHAR2 IS
+        opis VARCHAR2(400);
+    BEGIN
+        SELECT 'Opis plebsa ' || DEREF(kot).imie || ' o pseudonimie ' || DEREF(kot).pseudo INTO opis FROM dual;
+        RETURN opis;
+    END;
+END;
+/
+
+CREATE TABLE PlebsT OF PlebsO(
+    CONSTRAINT PlebsT_key PRIMARY KEY (pseudo)
+);
+/
+
+-------------- E L I T A ---------------
+CREATE OR REPLACE TYPE ElitaO AS OBJECT
+(
+    pseudo      VARCHAR2(15),
+    kot         REF KocuryO,
+    slugus      REF PlebsO,
+    MEMBER FUNCTION get_sluga RETURN REF PlebsO,
+    MEMBER FUNCTION opis_elity RETURN VARCHAR2
+);
+/
+
+CREATE OR REPLACE TYPE BODY ElitaO AS
+    MEMBER FUNCTION get_sluga RETURN REF PlebsO IS
+        BEGIN
+            RETURN slugus;
+        END;
+
+    MEMBER FUNCTION opis_elity RETURN VARCHAR2 IS
+            opis VARCHAR2(400);
+        BEGIN
+            SELECT 'Kot ' || pseudo || ' jest elita oraz posiada plebsa ' || DEREF(slugus).pseudo INTO opis FROM dual;
+            RETURN opis;
+        END;
+END;
+/
+
+CREATE TABLE ElitaT OF ElitaO(
+    CONSTRAINT ElitaT_key PRIMARY KEY (pseudo)
+);
+/
+
+-------------- K O N T O ---------------
+CREATE OR REPLACE TYPE KontoOO AS OBJECT
+(
+    nr_myszy            NUMBER(5),
+    data_wprowadzenia   DATE,
+    data_usuniecia      DATE,
+    kot                 REF ElitaO,
+    MAP MEMBER FUNCTION opis_konta RETURN VARCHAR2,
+    MEMBER PROCEDURE usun_mysz(dat DATE)
+);
+/
+
+CREATE OR REPLACE TYPE BODY KontoOO 
+AS
+    MAP MEMBER FUNCTION opis_konta RETURN VARCHAR2 IS
+        elita ElitaO;
+        kocur KocuryO;
+        BEGIN
+            SELECT DEREF(kot) INTO elita FROM DUAL;
+            SELECT DEREF(elita.kot) INTO kocur FROM DUAL;
+            RETURN 'Mysz numer ' || nr_myszy || ' wprowadzona w ' || TO_CHAR(data_wprowadzenia) || ' nalezy do  ' || kocur.PSEUDO;
+        END;
+        
+    MEMBER PROCEDURE usun_mysz(dat DATE) IS
+        BEGIN
+          data_usuniecia := dat;
+        END;
+END;
+/
+
+CREATE TABLE KontoTT OF KontoOO (
+    CONSTRAINT KontoT_keyy PRIMARY KEY (nr_myszy)
+);
+/
+------------- I N C Y D E N T ---------------
+
+CREATE OR REPLACE TYPE IncydentO AS OBJECT
+(
+    pseudo          VARCHAR2(15),
+    kot             REF KocuryO,
+    imie_wroga      VARCHAR2(15),
+    data_incydentu  DATE,
+    opis_incydentu  VARCHAR2(100),
+    MEMBER FUNCTION get_opis_incydentu RETURN VARCHAR2
+);
+/
+
+CREATE OR REPLACE TYPE BODY IncydentO
+AS
+    MEMBER FUNCTION get_opis_incydentu RETURN VARCHAR2 IS
+    kocur KocuryO;
+    BEGIN
+        SELECT DEREF(kot) INTO kocur FROM DUAL;
+        RETURN ' Kotek ' || kocur.imie || ' o pseudonimie ' || kocur.pseudo || ' mial incydent z ' || imie_wroga || ' w dniu ' || data_incydentu;
+    END;
+END;
+/
+
+CREATE TABLE IncydentyT OF IncydentO (
+    CONSTRAINT incydento_pk PRIMARY KEY(pseudo, imie_wroga)
+);
+/
+----- U Z U P E L N I A N I E     D A N Y M I ------
+
+INSERT ALL
+INTO KocuryT VALUES (KocuryO('JACEK','M','PLACEK','LOWCZY','LYSY','2008-12-01',67,NULL,2))
+INTO KocuryT VALUES (KocuryO('BARI','M','RURA','LAPACZ','LYSY','2009-09-01',56,NULL,2))
+INTO KocuryT VALUES (KocuryO('MICKA','D','LOLA','MILUSIA','TYGRYS','2009-10-14',25,47,1))
+INTO KocuryT VALUES (KocuryO('LUCEK','M','ZERO','KOT','KURKA','2010-03-01',43,NULL,3))
+INTO KocuryT VALUES (KocuryO('SONIA','D','PUSZYSTA','MILUSIA','ZOMBI','2010-11-18',20,35,3))
+INTO KocuryT VALUES (KocuryO('LATKA','D','UCHO','KOT','RAFA','2011-01-01',40,NULL,4))
+INTO KocuryT VALUES (KocuryO('DUDEK','M','MALY','KOT','RAFA','2011-05-15',40,NULL,4))
+INTO KocuryT VALUES (KocuryO('MRUCZEK','M','TYGRYS','SZEFUNIO',NULL,'2002-01-01',103,33,1))
+INTO KocuryT VALUES (KocuryO('CHYTRY','M','BOLEK','DZIELCZY','TYGRYS','2002-05-05',50,NULL,1))
+INTO KocuryT VALUES (KocuryO('KOREK','M','ZOMBI','BANDZIOR','TYGRYS','2004-03-16',75,13,3))
+INTO KocuryT VALUES (KocuryO('BOLEK','M','LYSY','BANDZIOR','TYGRYS','2006-08-15',72,21,2))
+INTO KocuryT VALUES (KocuryO('ZUZIA','D','SZYBKA','LOWCZY','LYSY','2006-07-21',65,NULL,2))
+INTO KocuryT VALUES (KocuryO('RUDA','D','MALA','MILUSIA','TYGRYS','2006-09-17',22,42,1))
+INTO KocuryT VALUES (KocuryO('PUCEK','M','RAFA','LOWCZY','TYGRYS','2006-10-15',65,NULL,4))
+INTO KocuryT VALUES (KocuryO('PUNIA','D','KURKA','LOWCZY','ZOMBI','2008-01-01',61,NULL,3))
+INTO KocuryT VALUES (KocuryO('BELA','D','LASKA','MILUSIA','LYSY','2008-02-01',24,28,2))
+INTO KocuryT VALUES (KocuryO('KSAWERY','M','MAN','LAPACZ','RAFA','2008-07-12',51,NULL,4))
+INTO KocuryT VALUES (KocuryO('MELA','D','DAMA','LAPACZ','RAFA','2008-11-01',51,NULL,4))
+SELECT * FROM dual;
+COMMIT;
+
+INSERT INTO PlebsT
+    SELECT PlebsO(K.pseudo, REF(K))
+    FROM KocuryT K
+    WHERE K.funkcja = 'KOT';
+COMMIT;
+
+INSERT INTO ElitaT
+  SELECT ElitaO(K.pseudo, REF(K), NULL)
+  FROM KocuryT K
+  WHERE K.szef = 'TYGRYS'
+        OR K.szef IS NULL;
+COMMIT;
+
+--UPDATE ElitaT
+--    SET slugus = (SELECT REF(T) FROM plebst T WHERE T.pseudo = 'MALY')
+--    WHERE DEREF(kot).pseudo = 'BOLEK';
+--COMMIT;
+
+INSERT INTO KontoTT
+  SELECT KontoOO(ROWNUM, ADD_MONTHS(CURRENT_DATE, -TRUNC(DBMS_RANDOM.VALUE(0, 12))), NULL, REF(K))
+  FROM ElitaT K;
+
+
+------- P R Z Y K L A D Y  S Q L --------
+
+-- realizacja z?aczen
+
+-- wypisanie wszystkich kont oraz kotow z nimi powiazanymi
+SELECT KN.nr_myszy, KN.data_wprowadzenia, KO.imie, KO.plec, KO.pseudo  
+    FROM KontoT KN JOIN KocuryT KO ON KN.kot.kot = REF(KO)
+    WHERE KN.data_wprowadzenia > TO_DATE('2023-05-10');
+
+-- wypisanie wszystkich elit wraz z ich slugusami
+SELECT E.pseudo || ' posiada slugusa o pseudonimie ' || P.pseudo "Lista elit"
+    FROM ElitaT E JOIN PlebsT P ON E.slugus = REF(P);
+
+
+-- podzapytania
+
+-- wypisz elity ktorych plebsem jest kot o pseudonimie ZERO
+SELECT E.pseudo 
+    FROM ElitaT E
+    WHERE DEREF(slugus).pseudo IN ( SELECT K.pseudo 
+                                        FROM KocuryT K 
+                                        WHERE K.pseudo = 'ZERO');
+
+-- wypisanie kazdego plebsiaka 
+SELECT DISTINCT ("sluga").opis_plebsa()
+    FROM KocuryT K JOIN (SELECT DEREF(E.get_sluga()) "sluga" FROM ElitaT E) ON ("sluga").kot = REF(K);
+
+
+-- grupowanie 
+SELECT K.funkcja, SUM(K.caly_przydzial())
+    FROM KocuryT K
+    GROUP BY K.funkcja
+    HAVING SUM(K.caly_przydzial()) > 100;
+
+
+-- metody zdefiniowane w ramach typow
+
+SELECT K.opis_kota() "Opis kota", K.caly_przydzial() "Calowity przydzial myszy", K.dni_w_stadku() "Liczba dni w stadku" FROM KocuryT K ORDER BY 2 DESC;
+
+SELECT P.opis_plebsa() "Opis plebsa" FROM PlebsT P;
+
+SELECT E.opis_elity(), DEREF(E.get_sluga()).pseudo "slugus" FROM ElitaT E;
+
+SELECT K.nr_myszy, K.opis_konta() FROM KontoTT K;
+
+-- l2 zad 18
+SELECT K1.imie, K1.w_stadku_od "Poluje od"
+    FROM KocuryT K1 JOIN KocuryT K2 ON K2.imie = 'JACEK'
+    WHERE K1.dni_w_stadku() < K2.dni_w_stadku()
+    ORDER BY K1.w_stadku_od DESC;
+
+-- l2 zad 23
+SELECT K.imie, 12 * K.caly_przydzial(), 'ponizej 864'
+    FROM KocuryT K
+    WHERE K.myszy_extra IS NOT NULL
+    AND 12 * K.caly_przydzial() < 864
+
+UNION
+
+SELECT k.imie, 12 * k.caly_przydzial(), '864'
+    FROM KocuryT k
+    WHERE myszy_extra IS NOT NULL
+    AND 12 * k.caly_przydzial() = 864
+
+UNION
+
+SELECT k.imie, 12 * k.caly_przydzial(), 'powyzej 864'
+    FROM KocuryT k
+    WHERE k.myszy_extra IS NOT NULL
+    AND 12 * k.caly_przydzial() > 864
+ORDER BY 2 DESC;
+
+
+-- l3 zad 34
+SET serveroutput ON;
+
+DECLARE
+    liczba NUMBER;
+    fun KocuryT.funkcja%TYPE;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('');
+    SELECT COUNT(pseudo), MIN(funkcja) INTO liczba, fun
+    FROM KocuryT
+    WHERE funkcja = TO_CHAR('&nazwa_funkcji');
+
+    IF liczba > 0 THEN
+        DBMS_OUTPUT.PUT_LINE('Znaleziono kota pelniacego funkcje ' || fun);
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('Nie znaleziono');
+    END IF;
+END;
+/
+
+/* Zad. 37. Napisa? blok, kt�ry powoduje wybranie w p?tli kursorowej FOR pi?ciu kot�w o najwy?szym ca?kowitym przydziale myszy. Wynik wy?wietli? na ekranie. */
+DECLARE 
+    CURSOR przydzialy IS
+        SELECT K.pseudo, K.caly_przydzial() zjada
+            FROM KocuryT K
+            ORDER BY 2 DESC;
+        
+    wiersz przydzialy%ROWTYPE;
+BEGIN
+    OPEN przydzialy;
+    DBMS_OUTPUT.PUT_LINE('Nr   Pseudonim   Zjada');
+    DBMS_OUTPUT.PUT_LINE('----------------------');
+    FOR i IN 1..5
+    LOOP
+        FETCH przydzialy INTO wiersz;
+        EXIT WHEN przydzialy%NOTFOUND;
+        DBMS_OUTPUT.PUT_LINE(TO_CHAR(i) ||'    '|| RPAD(wiersz.pseudo, 8) || '    ' || LPAD(TO_CHAR(wiersz.zjada), 5));
+    END LOOP;
+END;
+/
+
+
+
+
+/* Zad 49 */
+BEGIN
+    EXECUTE IMMEDIATE 'CREATE TABLE MYSZY(
+        nr_myszy        NUMBER(7)       CONSTRAINT myszy_pk         PRIMARY KEY,
+        lowca           VARCHAR2(15)    CONSTRAINT m_lowca_fk       REFERENCES Kocury(pseudo),
+        zjadacz         VARCHAR2(15)    CONSTRAINT m_zjadacz_fk     REFERENCES Kocury(pseudo),
+        waga_myszy      NUMBER(3)       CONSTRAINT waga_myszy_ogr   CHECK (waga_myszy BETWEEN 10 AND 85),
+        data_zlowienia  DATE            CONSTRAINT dat_nn           NOT NULL,
+        data_wydania    DATE,
+        CONSTRAINT daty_popr CHECK (data_zlowienia <= data_wydania) 
+    )';
+END;
+/
+
+/* nasz counter */
+CREATE SEQUENCE myszy_seq;
+DROP SEQUENCE myszy_seq;
+
+DECLARE
+    data_start                  DATE            := '2004-01-01';
+    aktualna_ostatnia_sroda     DATE            := NEXT_DAY(LAST_DAY(data_start) - 7, 'WEDNESDAY');
+    data_koncowa                DATE            := '2024-01-22'; 
+    myszy_mies                  NUMBER(5);
+
+    TYPE tp IS TABLE OF Kocury.pseudo%TYPE;
+    tab_pseudo           tp             := tp();
+    TYPE tm IS TABLE OF NUMBER(4);
+    tab_myszy            tm             := tm();
+    TYPE myszy_rek IS TABLE OF Myszy%ROWTYPE INDEX BY BINARY_INTEGER;
+    myszki               myszy_rek;
+    
+    nr_myszy             BINARY_INTEGER := 0;
+    indeks_zjadacza      NUMBER(2);
+BEGIN
+    LOOP
+        EXIT WHEN data_start >= data_koncowa;
+        
+            -- zabrane z zadania 9 wyszukiwanie ostatniej srody w miesiacu
+            IF data_start < NEXT_DAY(LAST_DAY(data_start), 'WEDNESDAY') - 7 THEN
+                aktualna_ostatnia_sroda := LEAST(NEXT_DAY(LAST_DAY(data_start), 'WEDNESDAY') - 7, data_koncowa);
+            ELSE
+                aktualna_ostatnia_sroda :=
+                        LEAST(NEXT_DAY(LAST_DAY(ADD_MONTHS(data_start, 1)), 'WEDNESDAY') - 7, data_koncowa);
+            END IF;
+
+            --pobbranie sumy przydzialu dla kotow ktore wtedy byly juz w stadku
+            SELECT SUM(NVL(przydzial_myszy, 0) + NVL(myszy_extra, 0))
+            INTO myszy_mies
+            FROM KOCURY
+            WHERE W_STADKU_OD < aktualna_ostatnia_sroda;
+
+            -- pobranie pseudonimow oraz przydzialu myszy do odp tabel
+            SELECT pseudo, NVL(PRZYDZIAL_MYSZY, 0) + NVL(MYSZY_EXTRA, 0)
+            BULK COLLECT INTO tab_pseudo, tab_myszy
+            FROM KOCURY
+            WHERE W_STADKU_OD < aktualna_ostatnia_sroda;
+
+            indeks_zjadacza := 1;
+
+            myszy_mies := CEIL(myszy_mies / tab_pseudo.COUNT);
+
+            FOR i IN 1..(myszy_mies * tab_pseudo.COUNT)
+                LOOP
+                    nr_myszy := nr_myszy + 1;
+                    myszki(nr_myszy).NR_MYSZY := nr_myszy;
+                    myszki(nr_myszy).LOWCA := tab_pseudo(MOD(i, tab_pseudo.COUNT) + 1);
+
+
+                    IF aktualna_ostatnia_sroda != data_koncowa THEN
+                        myszki(nr_myszy).DATA_WYDANIA := aktualna_ostatnia_sroda;
+
+                        --przydzial myszy zgdonie z do??czeniem oraz z przydzialem mysz
+                        IF tab_myszy(indeks_zjadacza) = 0 THEN
+                            indeks_zjadacza := indeks_zjadacza + 1;
+                        ELSE
+                            tab_myszy(indeks_zjadacza) := tab_myszy(indeks_zjadacza) - 1;
+                        end if;
+
+                        --nadwyzki losowo
+                        IF indeks_zjadacza > tab_myszy.COUNT THEN
+                            indeks_zjadacza := DBMS_RANDOM.VALUE(1, tab_myszy.COUNT);
+                        end if;
+                        
+                        myszki(nr_myszy).zjadacz := tab_pseudo(indeks_zjadacza);
+                    end if;
+                    
+                    myszki(nr_myszy).waga_myszy := DBMS_RANDOM.VALUE(15, 35);
+                    myszki(nr_myszy).data_zlowienia := data_start + MOD(nr_myszy, TRUNC(aktualna_ostatnia_sroda) - TRUNC(data_start));
+                    
+                end loop;
+                
+                data_start := aktualna_ostatnia_sroda + 1;
+                aktualna_ostatnia_sroda := NEXT_DAY(LAST_DAY(ADD_MONTHS(data_start, 1)) - 7, 'WEDNESDAY');
+            IF aktualna_ostatnia_sroda > data_koncowa THEN
+                aktualna_ostatnia_sroda := data_koncowa;
+            end if;
+    END LOOP;
+
+    FORALL i in 1..myszki.COUNT
+        INSERT INTO Myszy(nr_myszy, lowca, zjadacz, waga_myszy, data_zlowienia, data_wydania)
+        VALUES (myszy_seq.NEXTVAL, myszki(i).LOWCA, myszki(i).ZJADACZ, myszki(i).WAGA_MYSZY, myszki(i).DATA_ZLOWIENIA,
+                myszki(i).DATA_WYDANIA);
+END;
+/
+
+SELECT * FROM MYSZY;
+TRUNCATE TABLE MYSZY;
+
+SELECT *
+    FROM MYSZY 
+    WHERE DATA_ZLOWIENIA < TO_DATE('2004-02-01')
+    ORDER BY nr_myszy;
+
+
+BEGIN
+   FOR kot in (SELECT pseudo FROM Kocury)
+    LOOP
+       EXECUTE IMMEDIATE 'CREATE TABLE Myszy_kota_' || kot.pseudo || '(' ||
+           'nr_myszy        NUMBER(7)   CONSTRAINT myszy_kota_pk_'      || kot.pseudo || ' PRIMARY KEY,' ||
+           'waga_myszy      NUMBER(3)   CONSTRAINT waga_myszy_'         || kot.pseudo || ' CHECK (waga_myszy BETWEEN 10 AND 85),' ||
+           'data_zlowienia  DATE        CONSTRAINT data_zlowienia_nn_'  || kot.pseudo || ' NOT NULL)' ;
+       END LOOP;
+END;
+/
+
+
+--BEGIN
+--    FOR kot IN (SELECT pseudo FROM Kocury)
+--    LOOP
+--        EXECUTE IMMEDIATE 'DROP TABLE Myszy_kota_' || kot.pseudo;
+--        END LOOP;
+--END;
+--/
+
+CREATE OR REPLACE PROCEDURE przyjmij_na_stan(kotPseudo Kocury.pseudo%TYPE, data_zlowienia DATE)
+AS
+    TYPE tw IS TABLE OF NUMBER(3);
+        tab_wagi tw := tw();
+    TYPE tn IS TABLE OF NUMBER(7);
+        tab_nr tn := tn();
+        
+    ile_kotow NUMBER(2);
+    
+    nie_ma_kota EXCEPTION;
+    zla_data EXCEPTION;
+    brak_myszy_o_dacie EXCEPTION;
+BEGIN
+    IF data_zlowienia > SYSDATE  OR data_zlowienia = NEXT_DAY(LAST_DAY(data_zlowienia)-7, 'WEDNESDAY')
+        THEN RAISE zla_data;
+    END IF;
+
+    SELECT COUNT(K.pseudo) INTO ile_kotow FROM KOCURY K  WHERE K.pseudo = UPPER(kotPseudo);
+    IF ile_kotow = 0 THEN RAISE nie_ma_kota; END IF;
+
+    EXECUTE IMMEDIATE 
+        'SELECT nr_myszy, waga_myszy 
+            FROM Myszy_kota_'|| kotPseudo || 
+            ' WHERE data_zlowienia= ''' || data_zlowienia || ''''
+        BULK COLLECT INTO tab_nr, tab_wagi;
+        
+    IF tab_nr.COUNT = 0 THEN
+        RAISE brak_myszy_o_dacie;
+    end if;
+
+    FORALL i in 1..tab_nr.COUNT
+        INSERT INTO Myszy VALUES (tab_nr(i), UPPER(kotPseudo), NULL, tab_wagi(i),DATA_ZLOWIENIA, NULL);
+
+    EXECUTE IMMEDIATE 'DELETE FROM Myszy_kota_' || kotPseudo || ' WHERE data_zlowienia= ''' || data_zlowienia || '''';
+    
+    EXCEPTION
+        WHEN nie_ma_kota THEN DBMS_OUTPUT.PUT_LINE('BRAK KOTA O PSEUDONIMIE Myszy_kota_'|| UPPER(kotPseudo));
+        WHEN zla_data THEN DBMS_OUTPUT.PUT_LINE('ZLA DATA');
+        WHEN brak_myszy_o_dacie THEN DBMS_OUTPUT.PUT_LINE('BRAK MYSZY W ZLOWIONEJ DACIE');
+END;
+
+--czy istnieja myszy ktore maj? ju? wyp?ate aktualnej srdu
+
+CREATE OR REPLACE PROCEDURE Wyplata
+AS
+    TYPE tp IS TABLE OF Kocury.pseudo%TYPE;
+        tab_pseudo tp := tp();
+    TYPE tm is TABLE OF NUMBER(4);
+        tab_myszy tm := tm();
+    TYPE tn IS TABLE OF NUMBER(7);
+        tab_nr tn := tn();
+    TYPE tz IS TABLE OF Kocury.pseudo%TYPE INDEX BY BINARY_INTEGER;
+        tab_zjadaczy tz;
+    TYPE tw IS TABLE OF Myszy%ROWTYPE;
+        tab_wierszy tw;
+    liczba_najedzonych NUMBER(2) := 0;
+    indeks_zjadacza NUMBER(2) := 1;
+    ile NUMBER(5);
+    powtorna_wyplata EXCEPTION;
+BEGIN
+    --wedlug hierarchi
+    SELECT pseudo, NVL(przydzial_myszy,0) + NVL(myszy_extra, 0)
+        BULK COLLECT INTO tab_pseudo, tab_myszy
+    FROM Kocury CONNECT BY PRIOR pseudo = szef
+    START WITH SZEF IS NULL
+    ORDER BY level;
+
+    SELECT COUNT(NR_MYSZY)
+        INTO ile
+    FROM MYSZY
+    WHERE DATA_WYDANIA = NEXT_DAY(LAST_DAY(TRUNC(SYSDATE))-7, '?RODA');
+    --this is what is required to pass this list
+    DBMS_OUTPUT.PUT_LINE('ile: '||ile);
+    IF ile > 0 THEN
+        RAISE powtorna_wyplata;
+    end if;
+
+    SELECT *
+        BULK COLLECT INTO tab_wierszy
+    FROM Myszy
+    WHERE DATA_WYDANIA IS NULL;
+
+    FOR i IN 1..tab_wierszy.COUNT
+        LOOP
+            WHILE tab_myszy(indeks_zjadacza) = 0 AND liczba_najedzonych < tab_pseudo.COUNT
+                LOOP
+                    liczba_najedzonych := liczba_najedzonych + 1;
+                    indeks_zjadacza := MOD(indeks_zjadacza + 1, tab_pseudo.COUNT) + 1;
+                END LOOP;
+            --jezeli wszyscy juz dostali to daj szefowi nad szefami
+            IF liczba_najedzonych = tab_pseudo.COUNT THEN
+                tab_zjadaczy(i) := 'TYGRYS';
+            ELSE
+                indeks_zjadacza := MOD(indeks_zjadacza + 1, tab_pseudo.COUNT) + 1;
+                tab_zjadaczy(i) := tab_pseudo(indeks_zjadacza);
+                tab_myszy(indeks_zjadacza) := tab_myszy(indeks_zjadacza) - 1;
+            end if;
+
+            IF NEXT_DAY(LAST_DAY(tab_wierszy(i).DATA_ZLOWIENIA)-7, '?RODA') < tab_wierszy(i).DATA_ZLOWIENIA THEN
+                tab_wierszy(i).DATA_WYDANIA := NEXT_DAY(LAST_DAY(ADD_MONTHS(tab_wierszy(i).DATA_ZLOWIENIA,1))-7, '?RODA');
+            ELSE
+                tab_wierszy(i).DATA_WYDANIA := NEXT_DAY(LAST_DAY(tab_wierszy(i).DATA_ZLOWIENIA)-7, '?RODA');
+            end if;
+        END LOOP;
+    FORALL i IN 1..tab_wierszy.COUNT
+            UPDATE Myszy SET data_wydania=tab_wierszy(i).DATA_WYDANIA , zjadacz=tab_zjadaczy(i)
+            WHERE nr_myszy=tab_wierszy(i).NR_MYSZY;
+    EXCEPTION
+            WHEN powtorna_wyplata THEN DBMS_OUTPUT.PUT_LINE('POWOTRNA WYPLATA!');
+END;
+/
+
+
+INSERT INTO Myszy_kota_DAMA VALUES(myszy_seq.nextval, 60, '2022-12-28');
+
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 69, '2022-12-01');
+
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 29, '2022-12-01');
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 78, '2022-12-20');
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 78, '2022-12-30');
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 28, '2022-12-30');
+BEGIN
+    przyjmij_na_stan('Dama', '2022-12-28');
+end;
+/
+
+BEGIN
+    przyjmij_na_stan('TYGRYS', '2022-12-01');
+end;
+/
+
+BEGIN
+    Wyplata();
+END;
+/
+/* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /* -------------------------------------------------------------- D R O P   T A B L E ---------------------------------------------------------------------------------------------------------*/
 /* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-/*
-DROP TABLE Bandy CASCADE CONSTRAINTS;
-DROP TABLE Funkcje CASCADE CONSTRAINTS;
-DROP TABLE Wrogowie CASCADE CONSTRAINTS;
-DROP TABLE Kocury CASCADE CONSTRAINTS;
-DROP TABLE Wrogowie_kocurow CASCADE CONSTRAINTS;
-*/
 
-
+--DROP TABLE Bandy CASCADE CONSTRAINTS;
+--DROP TABLE Funkcje CASCADE CONSTRAINTS;
+--DROP TABLE Wrogowie CASCADE CONSTRAINTS;
+--DROP TABLE Kocury CASCADE CONSTRAINTS;
+--DROP TABLE Wrogowie_kocurow CASCADE CONSTRAINTS;
+--
+--DROP TABLE KocuryT CASCADE CONSTRAINTS;
+--DROP TABLE PlebsT CASCADE CONSTRAINTS;
+--DROP TABLE ElitaT CASCADE CONSTRAINTS;
+--DROP TABLE KontoT CASCADE CONSTRAINTS;
+--DROP TABLE IncydentyT CASCADE CONSTRAINTS;
+--DROP TYPE BODY KocuryO ;
+--DROP TYPE KocuryO FORCE;
+--DROP TYPE BODY ElitaO;
+--DROP TYPE ElitaO FORCE;
+--DROP TYPE BODY PlebsO;
+--DROP TYPE PlebsO FORCE;
+--DROP TYPE BODY KontoO;
+--DROP TYPE KontoO FORCE;
+--DROP TYPE BODY IncydentO;
+--DROP TYPE IncydentO FORCE;
 
 
 
