@@ -1768,7 +1768,7 @@ INSERT INTO KontoTT
 
 -- wypisanie wszystkich kont oraz kotow z nimi powiazanymi
 SELECT KN.nr_myszy, KN.data_wprowadzenia, KO.imie, KO.plec, KO.pseudo  
-    FROM KontoT KN JOIN KocuryT KO ON KN.kot.kot = REF(KO)
+    FROM KontoTT KN JOIN KocuryT KO ON KN.kot.kot = REF(KO)
     WHERE KN.data_wprowadzenia > TO_DATE('2023-05-10');
 
 -- wypisanie wszystkich elit wraz z ich slugusami
@@ -1819,14 +1819,14 @@ SELECT K.imie, 12 * K.caly_przydzial(), 'ponizej 864'
     WHERE K.myszy_extra IS NOT NULL
     AND 12 * K.caly_przydzial() < 864
 
-UNION
+UNION ALL
 
 SELECT k.imie, 12 * k.caly_przydzial(), '864'
     FROM KocuryT k
     WHERE myszy_extra IS NOT NULL
     AND 12 * k.caly_przydzial() = 864
 
-UNION
+UNION ALL
 
 SELECT k.imie, 12 * k.caly_przydzial(), 'powyzej 864'
     FROM KocuryT k
@@ -1855,7 +1855,7 @@ BEGIN
 END;
 /
 
-/* Zad. 37. Napisa? blok, kt�ry powoduje wybranie w p?tli kursorowej FOR pi?ciu kot�w o najwy?szym ca?kowitym przydziale myszy. Wynik wy?wietli? na ekranie. */
+/* Zad. 37. Napisa? blok, który powoduje wybranie w p?tli kursorowej FOR pi?ciu kotów o najwy?szym ca?kowitym przydziale myszy. Wynik wy?wietli? na ekranie. */
 DECLARE 
     CURSOR przydzialy IS
         SELECT K.pseudo, K.caly_przydzial() zjada
@@ -2053,7 +2053,7 @@ BEGIN
         WHEN zla_data THEN DBMS_OUTPUT.PUT_LINE('ZLA DATA');
         WHEN brak_myszy_o_dacie THEN DBMS_OUTPUT.PUT_LINE('BRAK MYSZY W ZLOWIONEJ DACIE');
 END;
-
+/
 --czy istnieja myszy ktore maj? ju? wyp?ate aktualnej srdu
 
 CREATE OR REPLACE PROCEDURE Wyplata
@@ -2083,9 +2083,8 @@ BEGIN
     SELECT COUNT(NR_MYSZY)
         INTO ile
     FROM MYSZY
-    WHERE DATA_WYDANIA = NEXT_DAY(LAST_DAY(TRUNC(SYSDATE))-7, '?RODA');
-    --this is what is required to pass this list
-    DBMS_OUTPUT.PUT_LINE('ile: '||ile);
+    WHERE DATA_WYDANIA = NEXT_DAY(LAST_DAY(TRUNC(SYSDATE))-7, 'WEDNESDAY');
+
     IF ile > 0 THEN
         RAISE powtorna_wyplata;
     end if;
@@ -2111,10 +2110,10 @@ BEGIN
                 tab_myszy(indeks_zjadacza) := tab_myszy(indeks_zjadacza) - 1;
             end if;
 
-            IF NEXT_DAY(LAST_DAY(tab_wierszy(i).DATA_ZLOWIENIA)-7, '?RODA') < tab_wierszy(i).DATA_ZLOWIENIA THEN
-                tab_wierszy(i).DATA_WYDANIA := NEXT_DAY(LAST_DAY(ADD_MONTHS(tab_wierszy(i).DATA_ZLOWIENIA,1))-7, '?RODA');
+            IF NEXT_DAY(LAST_DAY(tab_wierszy(i).DATA_ZLOWIENIA)-7, 'WEDNESDAY') < tab_wierszy(i).DATA_ZLOWIENIA THEN
+                tab_wierszy(i).DATA_WYDANIA := NEXT_DAY(LAST_DAY(ADD_MONTHS(tab_wierszy(i).DATA_ZLOWIENIA,1))-7, 'WEDNESDAY');
             ELSE
-                tab_wierszy(i).DATA_WYDANIA := NEXT_DAY(LAST_DAY(tab_wierszy(i).DATA_ZLOWIENIA)-7, '?RODA');
+                tab_wierszy(i).DATA_WYDANIA := NEXT_DAY(LAST_DAY(tab_wierszy(i).DATA_ZLOWIENIA)-7, 'WEDNESDAY');
             end if;
         END LOOP;
     FORALL i IN 1..tab_wierszy.COUNT
@@ -2126,21 +2125,20 @@ END;
 /
 
 
-INSERT INTO Myszy_kota_DAMA VALUES(myszy_seq.nextval, 60, '2022-12-28');
+INSERT INTO Myszy_kota_DAMA VALUES(myszy_seq.nextval, 28, '2023-12-28');
 
-INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 69, '2022-12-01');
-
-INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 29, '2022-12-01');
-INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 78, '2022-12-20');
-INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 78, '2022-12-30');
-INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 28, '2022-12-30');
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 31, '2023-12-01');
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 30, '2023-12-01');
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 34, '2023-12-20');
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 26, '2023-12-30');
+INSERT INTO MYSZY_KOTA_TYGRYS VALUES(myszy_seq.nextval, 28, '2023-12-30');
 BEGIN
-    przyjmij_na_stan('Dama', '2022-12-28');
+    przyjmij_na_stan('Dama', '2023-12-28');
 end;
 /
 
 BEGIN
-    przyjmij_na_stan('TYGRYS', '2022-12-01');
+    przyjmij_na_stan('TYGRYS', '2023-12-01');
 end;
 /
 
@@ -2148,6 +2146,8 @@ BEGIN
     Wyplata();
 END;
 /
+
+SELECT COUNT(*) FROM MYSZY;
 /* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /* -------------------------------------------------------------- D R O P   T A B L E ---------------------------------------------------------------------------------------------------------*/
 /* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
@@ -2173,6 +2173,8 @@ END;
 --DROP TYPE KontoO FORCE;
 --DROP TYPE BODY IncydentO;
 --DROP TYPE IncydentO FORCE;
+
+
 
 
 
