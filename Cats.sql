@@ -1545,7 +1545,7 @@ DROP TRIGGER limit_przydzialu;
 DROP TABLE OSZUSTWA;
 
 
-/* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+ --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /* -------------------------------------------------------------- L I S T A   C Z W A R T A ---------------------------------------------------------------------------------------------------*/
 /* --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -1558,14 +1558,14 @@ CREATE OR REPLACE TYPE KocuryO AS OBJECT
      plec               VARCHAR2(1),
      pseudo             VARCHAR2(15),
      funkcja            VARCHAR2(10),
-     szef               VARCHAR2(15),
+     szef               REF KocuryO,
      w_stadku_od        DATE,
      przydzial_myszy    NUMBER(3),
      myszy_extra        NUMBER(3),
      nr_bandy           NUMBER(2),
      MEMBER FUNCTION caly_przydzial RETURN NUMBER,
      MEMBER FUNCTION dni_w_stadku RETURN NUMBER,
-     MAP MEMBER FUNCTION opis_kota RETURN VARCHAR2
+     MEMBER FUNCTION opis_kota RETURN VARCHAR2
 );
 /
 
@@ -1583,19 +1583,25 @@ CREATE OR REPLACE TYPE BODY KocuryO AS
         RETURN dni;
     END;
     
-    MAP MEMBER FUNCTION opis_kota RETURN VARCHAR2 IS
+    MEMBER FUNCTION opis_kota RETURN VARCHAR2 IS
     BEGIN
         RETURN 'Imie ' || imie || ' pseudo ' || pseudo || ' plec ' || plec || ' funkcja ' || funkcja || ' banda ' || nr_bandy;
     END;
 END;
 /
 
-CREATE TABLE KocuryT OF KocuryO 
-(
-    CONSTRAINT KocuryT_key PRIMARY KEY (pseudo)
+CREATE TABLE KocuryT OF KocuryO (
+  imie CONSTRAINT kocuryo_imie_nn NOT NULL,
+  plec CONSTRAINT kocuryo_plec_ch CHECK(plec IN ('M', 'D')),
+  pseudo CONSTRAINT kocuryo_pseudo_pk PRIMARY KEY,
+  funkcja CONSTRAINT ko_f_fk REFERENCES Funkcje(funkcja),
+  szef SCOPE IS KocuryT,
+  w_stadku_od DEFAULT SYSDATE,
+  nr_bandy CONSTRAINT ko_nr_fk REFERENCES Bandy(nr_bandy)
 );
-/
 
+DROP TYPE KocuryO;
+DROP TABLE KocuryT;
 
 -------------- P L E B S ---------------
 CREATE OR REPLACE TYPE PlebsO AS OBJECT
@@ -1618,10 +1624,14 @@ END;
 /
 
 CREATE TABLE PlebsT OF PlebsO(
-    CONSTRAINT PlebsT_key PRIMARY KEY (pseudo)
-);
+    kot SCOPE IS KocuryT CONSTRAINT plebso_kot_nn NOT NULL,
+    CONSTRAINT plebso_fk FOREIGN KEY (pseudo) REFERENCES KocuryT(pseudo),
+    CONSTRAINT plebso_pk PRIMARY KEY (pseudo)
+    );
 /
 
+DROP TYPE PlebsO;
+DROP TABLE PlebsT;
 -------------- E L I T A ---------------
 CREATE OR REPLACE TYPE ElitaO AS OBJECT
 (
@@ -1649,25 +1659,29 @@ END;
 /
 
 CREATE TABLE ElitaT OF ElitaO(
-    CONSTRAINT ElitaT_key PRIMARY KEY (pseudo)
+    pseudo CONSTRAINT elitao_pseudo_pk PRIMARY KEY,
+    kot SCOPE IS KocuryT CONSTRAINT elitao_kot_nn NOT NULL,
+    slugus SCOPE IS PlebsT
 );
-/
+
+DROP TYPE ElitaO;
+DROP TABLE ElitaT;
 
 -------------- K O N T O ---------------
-CREATE OR REPLACE TYPE KontoOO AS OBJECT
+CREATE OR REPLACE TYPE KontoO AS OBJECT
 (
     nr_myszy            NUMBER(5),
     data_wprowadzenia   DATE,
     data_usuniecia      DATE,
     kot                 REF ElitaO,
-    MAP MEMBER FUNCTION opis_konta RETURN VARCHAR2,
+    MEMBER FUNCTION opis_konta RETURN VARCHAR2,
     MEMBER PROCEDURE usun_mysz(dat DATE)
 );
 /
 
-CREATE OR REPLACE TYPE BODY KontoOO 
+CREATE OR REPLACE TYPE BODY KontoO 
 AS
-    MAP MEMBER FUNCTION opis_konta RETURN VARCHAR2 IS
+    MEMBER FUNCTION opis_konta RETURN VARCHAR2 IS
         elita ElitaO;
         kocur KocuryO;
         BEGIN
@@ -1683,60 +1697,101 @@ AS
 END;
 /
 
-CREATE TABLE KontoTT OF KontoOO (
-    CONSTRAINT KontoT_keyy PRIMARY KEY (nr_myszy)
+CREATE TABLE KontoT OF KontoO (
+    nr_myszy CONSTRAINT kontao_n_pk PRIMARY KEY,
+    kot SCOPE IS ElitaT CONSTRAINT ko_w_nn NOT NULL,
+    data_wprowadzenia CONSTRAINT ko_dw_nn NOT NULL,
+    CONSTRAINT ko_dw_du_ch CHECK(data_wprowadzenia <= data_usuniecia)
 );
-/
-------------- I N C Y D E N T ---------------
 
-CREATE OR REPLACE TYPE IncydentO AS OBJECT
-(
-    pseudo          VARCHAR2(15),
-    kot             REF KocuryO,
-    imie_wroga      VARCHAR2(15),
-    data_incydentu  DATE,
-    opis_incydentu  VARCHAR2(100),
-    MEMBER FUNCTION get_opis_incydentu RETURN VARCHAR2
-);
-/
+DROP TYPE KontoO;
+DROP TABLE KontoT;
 
-CREATE OR REPLACE TYPE BODY IncydentO
-AS
-    MEMBER FUNCTION get_opis_incydentu RETURN VARCHAR2 IS
-    kocur KocuryO;
-    BEGIN
-        SELECT DEREF(kot) INTO kocur FROM DUAL;
-        RETURN ' Kotek ' || kocur.imie || ' o pseudonimie ' || kocur.pseudo || ' mial incydent z ' || imie_wroga || ' w dniu ' || data_incydentu;
-    END;
+----- T R I G G E R Y -----
+
+CREATE OR REPLACE TRIGGER elita_trg
+    BEFORE INSERT OR UPDATE
+    ON ElitaT
+    FOR EACH ROW
+DECLARE
+    countElita INTEGER;
+    plebsot EXCEPTION;
+    duplikat EXCEPTION;
+    PRAGMA AUTONOMOUS_TRANSACTION;
+BEGIN
+    SELECT COUNT(PSEUDO) INTO countElita FROM PlebsT P WHERE P.kot = :NEW.kot;
+    IF countElita > 0 THEN
+        RAISE plebsot;
+    END IF;
+
+    EXECUTE IMMEDIATE 
+    'SELECT COUNT(PSEUDO) FROM ElitaT E WHERE E.kot = :kot'
+    INTO countElita
+    USING :NEW.kot;
+    
+    
+    IF countElita > 0 THEN
+        RAISE duplikat;
+    END IF;
+    
+    EXCEPTION
+        WHEN plebsot THEN DBMS_OUTPUT.PUT_LINE('TEN KOT JEST JUZ PLEBSEM');
+        WHEN duplikat THEN DBMS_OUTPUT.PUT_LINE('KOT JUZ JEST ELITA');
 END;
 /
 
-CREATE TABLE IncydentyT OF IncydentO (
-    CONSTRAINT incydento_pk PRIMARY KEY(pseudo, imie_wroga)
-);
+
+CREATE OR REPLACE TRIGGER plebs_trg
+    BEFORE INSERT OR UPDATE
+    ON PlebsT
+    FOR EACH ROW
+DECLARE
+    countPlebs NUMBER;
+    elitsot EXCEPTION;
+    duplikat EXCEPTION;
+    PRAGMA AUTONOMOUS_TRANSACTION;
+BEGIN
+    
+    SELECT COUNT(PSEUDO) INTO countPlebs FROM ElitaT E WHERE E.kot = :NEW.kot;
+    IF countPlebs > 0 THEN
+        RAISE elitsot;
+    END IF;
+
+    EXECUTE IMMEDIATE 
+    'SELECT COUNT(PSEUDO) FROM PlebsT P WHERE P.kot = :kot'
+    INTO countPlebs
+    USING :NEW.kot;
+    
+    IF countPlebs > 0 THEN
+        RAISE duplikat;
+    END IF;
+    
+    EXCEPTION
+        WHEN elitsot THEN DBMS_OUTPUT.PUT_LINE('TEN KOT JEST JUZ ELITA');
+        WHEN duplikat THEN DBMS_OUTPUT.PUT_LINE('KOT JUZ JEST PLEBSEM');
+END;
 /
+
 ----- U Z U P E L N I A N I E     D A N Y M I ------
 
-INSERT ALL
-INTO KocuryT VALUES (KocuryO('JACEK','M','PLACEK','LOWCZY','LYSY','2008-12-01',67,NULL,2))
-INTO KocuryT VALUES (KocuryO('BARI','M','RURA','LAPACZ','LYSY','2009-09-01',56,NULL,2))
-INTO KocuryT VALUES (KocuryO('MICKA','D','LOLA','MILUSIA','TYGRYS','2009-10-14',25,47,1))
-INTO KocuryT VALUES (KocuryO('LUCEK','M','ZERO','KOT','KURKA','2010-03-01',43,NULL,3))
-INTO KocuryT VALUES (KocuryO('SONIA','D','PUSZYSTA','MILUSIA','ZOMBI','2010-11-18',20,35,3))
-INTO KocuryT VALUES (KocuryO('LATKA','D','UCHO','KOT','RAFA','2011-01-01',40,NULL,4))
-INTO KocuryT VALUES (KocuryO('DUDEK','M','MALY','KOT','RAFA','2011-05-15',40,NULL,4))
-INTO KocuryT VALUES (KocuryO('MRUCZEK','M','TYGRYS','SZEFUNIO',NULL,'2002-01-01',103,33,1))
-INTO KocuryT VALUES (KocuryO('CHYTRY','M','BOLEK','DZIELCZY','TYGRYS','2002-05-05',50,NULL,1))
-INTO KocuryT VALUES (KocuryO('KOREK','M','ZOMBI','BANDZIOR','TYGRYS','2004-03-16',75,13,3))
-INTO KocuryT VALUES (KocuryO('BOLEK','M','LYSY','BANDZIOR','TYGRYS','2006-08-15',72,21,2))
-INTO KocuryT VALUES (KocuryO('ZUZIA','D','SZYBKA','LOWCZY','LYSY','2006-07-21',65,NULL,2))
-INTO KocuryT VALUES (KocuryO('RUDA','D','MALA','MILUSIA','TYGRYS','2006-09-17',22,42,1))
-INTO KocuryT VALUES (KocuryO('PUCEK','M','RAFA','LOWCZY','TYGRYS','2006-10-15',65,NULL,4))
-INTO KocuryT VALUES (KocuryO('PUNIA','D','KURKA','LOWCZY','ZOMBI','2008-01-01',61,NULL,3))
-INTO KocuryT VALUES (KocuryO('BELA','D','LASKA','MILUSIA','LYSY','2008-02-01',24,28,2))
-INTO KocuryT VALUES (KocuryO('KSAWERY','M','MAN','LAPACZ','RAFA','2008-07-12',51,NULL,4))
-INTO KocuryT VALUES (KocuryO('MELA','D','DAMA','LAPACZ','RAFA','2008-11-01',51,NULL,4))
-SELECT * FROM dual;
+INSERT INTO KocuryT VALUES ('MRUCZEK','M','TYGRYS','SZEFUNIO',NULL,'2002-01-01',103,33,1);
+INSERT INTO KocuryT SELECT 'MICKA','D','LOLA','MILUSIA',REF(K),'2009-10-14',25,47,1 FROM KocuryT K WHERE K.pseudo = 'TYGRYS';
+INSERT INTO KocuryT SELECT 'CHYTRY','M','BOLEK','DZIELCZY',REF(K),'2002-05-05',50,NULL,1 FROM KocuryT K WHERE K.pseudo = 'TYGRYS';
+INSERT INTO KocuryT SELECT 'KOREK','M','ZOMBI','BANDZIOR',REF(K),'2004-03-16',75,13,3 FROM KocuryT K WHERE K.pseudo = 'TYGRYS';
+INSERT INTO KocuryT SELECT 'BOLEK','M','LYSY','BANDZIOR',REF(K),'2006-08-15',72,21,2 FROM KocuryT K WHERE K.pseudo = 'TYGRYS';
+INSERT INTO KocuryT SELECT 'RUDA','D','MALA','MILUSIA',REF(K),'2006-09-17',22,42,1 FROM KocuryT K WHERE K.pseudo = 'TYGRYS';
+INSERT INTO KocuryT SELECT 'PUCEK','M','RAFA','LOWCZY',REF(K),'2006-10-15',65,NULL,4 FROM KocuryT K WHERE K.pseudo = 'TYGRYS';
+INSERT INTO KocuryT SELECT 'JACEK','M','PLACEK','LOWCZY',REF(K),'2008-12-01',67,NULL,2 FROM KocuryT K WHERE K.pseudo = 'LYSY';
+INSERT INTO KocuryT SELECT 'BARI','M','RURA','LAPACZ',REF(K),'2009-09-01',56,NULL,2 FROM KocuryT K WHERE K.pseudo = 'LYSY';
+INSERT INTO KocuryT SELECT 'ZUZIA','D','SZYBKA','LOWCZY',REF(K),'2006-07-21',65,NULL,2 FROM KocuryT K WHERE K.pseudo = 'LYSY';
+INSERT INTO KocuryT SELECT 'BELA','D','LASKA','MILUSIA',REF(K),'2008-02-01',24,28,2 FROM KocuryT K WHERE K.pseudo = 'LYSY';
+INSERT INTO KocuryT SELECT 'SONIA','D','PUSZYSTA','MILUSIA',REF(K),'2010-11-18',20,35,3 FROM KocuryT K WHERE K.pseudo = 'ZOMBI';
+INSERT INTO KocuryT SELECT 'PUNIA','D','KURKA','LOWCZY',REF(K),'2008-01-01',61,NULL,3 FROM KocuryT K WHERE K.pseudo = 'ZOMBI';
+INSERT INTO KocuryT SELECT 'LATKA','D','UCHO','KOT',REF(K),'2011-01-01',40,NULL,4 FROM KocuryT K WHERE K.pseudo = 'RAFA';
+INSERT INTO KocuryT SELECT 'DUDEK','M','MALY','KOT',REF(K),'2011-05-15',40,NULL,4 FROM KocuryT K WHERE K.pseudo = 'RAFA';
+INSERT INTO KocuryT SELECT 'KSAWERY','M','MAN','LAPACZ',REF(K),'2008-07-12',51,NULL,4 FROM KocuryT K WHERE K.pseudo = 'RAFA';
+INSERT INTO KocuryT SELECT 'MELA','D','DAMA','LAPACZ',REF(K),'2008-11-01',51,NULL,4 FROM KocuryT K WHERE K.pseudo = 'RAFA';
+INSERT INTO KocuryT SELECT 'LUCEK','M','ZERO','KOT',REF(K),'2010-03-01',43,NULL,3 FROM KocuryT K WHERE K.pseudo = 'KURKA';
 COMMIT;
 
 INSERT INTO PlebsT
@@ -1748,17 +1803,16 @@ COMMIT;
 INSERT INTO ElitaT
   SELECT ElitaO(K.pseudo, REF(K), NULL)
   FROM KocuryT K
-  WHERE K.szef = 'TYGRYS'
-        OR K.szef IS NULL;
+  WHERE K.funkcja='SZEFUNCIO' OR K.szef=( SELECT REF(K2) FROM KocuryT K2 WHERE K2.pseudo='TYGRYS');
 COMMIT;
 
 --UPDATE ElitaT
---    SET slugus = (SELECT REF(T) FROM plebst T WHERE T.pseudo = 'MALY')
---    WHERE DEREF(kot).pseudo = 'BOLEK';
+--    SET slugus = (SELECT REF(T) FROM plebst T WHERE T.pseudo = 'UCHO')
+--    WHERE DEREF(kot).pseudo = 'RAFA';
 --COMMIT;
 
-INSERT INTO KontoTT
-  SELECT KontoOO(ROWNUM, ADD_MONTHS(CURRENT_DATE, -TRUNC(DBMS_RANDOM.VALUE(0, 12))), NULL, REF(K))
+INSERT INTO KontoT
+  SELECT KontoO(ROWNUM, ADD_MONTHS(CURRENT_DATE, TRUNC(DBMS_RANDOM.VALUE(0, 12))), NULL, REF(K))
   FROM ElitaT K;
 
 
@@ -1768,7 +1822,7 @@ INSERT INTO KontoTT
 
 -- wypisanie wszystkich kont oraz kotow z nimi powiazanymi
 SELECT KN.nr_myszy, KN.data_wprowadzenia, KO.imie, KO.plec, KO.pseudo  
-    FROM KontoTT KN JOIN KocuryT KO ON KN.kot.kot = REF(KO)
+    FROM KontoT KN JOIN KocuryT KO ON KN.kot.kot = REF(KO)
     WHERE KN.data_wprowadzenia > TO_DATE('2023-05-10');
 
 -- wypisanie wszystkich elit wraz z ich slugusami
@@ -1805,7 +1859,7 @@ SELECT P.opis_plebsa() "Opis plebsa" FROM PlebsT P;
 
 SELECT E.opis_elity(), DEREF(E.get_sluga()).pseudo "slugus" FROM ElitaT E;
 
-SELECT K.nr_myszy, K.opis_konta() FROM KontoTT K;
+SELECT K.nr_myszy, K.opis_konta() FROM KontoT K;
 
 -- l2 zad 18
 SELECT K1.imie, K1.w_stadku_od "Poluje od"
